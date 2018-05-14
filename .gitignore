@@ -176,3 +176,6 @@ venv.bak/
 
 data/
 logs/
+
+# model weights
+*.hdf5 
