@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from functools import lru_cache
+from sklearn.utils import shufft
 
 @lru_cache(maxsize=None)
 def read_bitmap(dataset_name, bitmap_index):
@@ -29,6 +30,7 @@ def get_generator(dataset, num_pairs, batch_size=128):
             assert len(input_a) == len(input_b) == batch_size
             yield [np.asarray(input_a), np.asarray(input_b)], targets
             input_a, input_b, targets = [], [], []
+            match_file = shuffle(match_file)
             
         line = match_file.iloc[i % num_pairs]
         input_a.append(read_patch(dataset, line['patchID1']).reshape(64, 64, 1))
