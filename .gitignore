@@ -175,7 +175,7 @@ venv.bak/
 # End of https://www.gitignore.io/api/python,pycharm,jupyternotebook
 
 data/
-logs/
+*logs/
 
 # model weights
 *.hdf5 
