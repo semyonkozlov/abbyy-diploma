@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from functools import lru_cache
+from imgaug import augmenters as iaa
 
 @lru_cache(maxsize=None)
 def read_bitmap(dataset_name, bitmap_index):
@@ -17,12 +18,21 @@ def cut_patch_from_bitmap(bitmap, image_index):
 
     return bitmap[image_row * 64 : (image_row + 1) * 64, image_col * 64 : (image_col + 1) * 64]
 
-def create_generator(dataset, num_pairs, batch_size):    
+def create_generator(dataset, num_pairs, batch_size, augmentate=True):    
     i = 0
     input_a, input_b, targets = [], [], []
     
     match_file = pd.read_csv(f'{dataset}/m50_{num_pairs}_{num_pairs}_0.txt', delimiter=' ', 
         names=['patchID1', '3DpointID1', 'unused1', 'patchID2','3DpointID2', 'unused2', 'unused3'])
+    
+    aug = iaa.OneOf([
+        iaa.Fliplr(0.3),
+        iaa.Flipud(0.3),
+        iaa.Affine(rotate=(90)),
+        iaa.Affine(rotate=(180)),
+        iaa.Affine(rotate=(270)),
+        iaa.Noop()
+    ])
         
     while True:      
         if i % num_pairs == 0: # shuffle dataset every epoch
@@ -30,6 +40,11 @@ def create_generator(dataset, num_pairs, batch_size):
         
         if i % batch_size == 0 and i != 0:
             assert len(input_a) == len(input_b) == batch_size
+            
+            if augmentate:
+                input_a = aug.augment_images(input_a) 
+                input_b = aug.augment_images(input_b) 
+                
             yield [np.asarray(input_a), np.asarray(input_b)], targets
             input_a, input_b, targets = [], [], []
             
@@ -39,3 +54,14 @@ def create_generator(dataset, num_pairs, batch_size):
         targets.append(1 if line['3DpointID1'] == line['3DpointID2'] else -1)
         
         i += 1
+        
+def contrastive_loss(y_true, y_pred):
+    '''Contrastive loss from Hadsell-et-al.'06
+    http://yann.lecun.com/exdb/publis/pdf/hadsell-chopra-lecun-06.pdf
+    '''
+    margin = 1
+    y_true = y_true / 2 + 0.5
+    y_pred = y_pred / 2 + 0.5
+    return K.mean(y_true * K.square(y_pred) + 
+        (1 - y_true) * K.square(K.maximum(margin - y_pred, 0))) #mb K.epsilon()
+     
