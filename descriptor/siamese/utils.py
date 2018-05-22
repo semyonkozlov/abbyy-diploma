@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import keras.backend as K
 from functools import lru_cache
 from imgaug import augmenters as iaa
 
@@ -25,6 +26,10 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
     match_file = pd.read_csv(f'{dataset}/m50_{num_pairs}_{num_pairs}_0.txt', delimiter=' ', 
         names=['patchID1', '3DpointID1', 'unused1', 'patchID2','3DpointID2', 'unused2', 'unused3'])
     
+    dissimilarities = match_file[match_file['3DpointID1'] != match_file['3DpointID2']]
+    similarities = match_file[match_file['3DpointID1'] == match_file['3DpointID2']]
+    assert len(similarities) == len(dissimilarities) == len(match_file) // 2 == num_pairs // 2
+    
     aug = iaa.OneOf([
         iaa.Fliplr(0.3),
         iaa.Flipud(0.3),
@@ -36,7 +41,8 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
         
     while True:      
         if i % num_pairs == 0: # shuffle dataset every epoch
-            match_file = match_file.sample(frac=1)
+            similarities = similarities.sample(frac=1)
+            dissimilarities = dissimilarities.sample(frac=1)
         
         if i % batch_size == 0 and i != 0:
             assert len(input_a) == len(input_b) == batch_size
@@ -48,7 +54,7 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
             yield [np.asarray(input_a), np.asarray(input_b)], targets
             input_a, input_b, targets = [], [], []
             
-        line = match_file.iloc[i % num_pairs]
+        line = (similarities if i % 2 == 0 else dissimilarities).iloc[(i // 2) % (num_pairs // 2)]
         input_a.append(read_patch(dataset, line['patchID1']).reshape(64, 64, 1))
         input_b.append(read_patch(dataset, line['patchID2']).reshape(64, 64, 1))
         targets.append(1 if line['3DpointID1'] == line['3DpointID2'] else -1)
@@ -60,8 +66,6 @@ def contrastive_loss(y_true, y_pred):
     http://yann.lecun.com/exdb/publis/pdf/hadsell-chopra-lecun-06.pdf
     '''
     margin = 1
-    y_true = y_true / 2 + 0.5
-    y_pred = y_pred / 2 + 0.5
-    return K.mean(y_true * K.square(y_pred) + 
-        (1 - y_true) * K.square(K.maximum(margin - y_pred, 0))) #mb K.epsilon()
-     
+    y_true = -(y_true / 2 - 0.5)
+    y_pred = -(y_pred / 2 - 0.5)
+    return K.mean(y_true * K.square(y_pred) + (1 - y_true) * K.square(K.maximum(margin - y_pred, 0)))     
