@@ -57,7 +57,7 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
         line = (similarities if i % 2 == 0 else dissimilarities).iloc[(i // 2) % (num_pairs // 2)]
         input_a.append(read_patch(dataset, line['patchID1']).reshape(64, 64, 1))
         input_b.append(read_patch(dataset, line['patchID2']).reshape(64, 64, 1))
-        targets.append(1 if line['3DpointID1'] == line['3DpointID2'] else -1)
+        targets.append(0 if line['3DpointID1'] == line['3DpointID2'] else 1)
         
         i += 1
         
@@ -66,6 +66,4 @@ def contrastive_loss(y_true, y_pred):
     http://yann.lecun.com/exdb/publis/pdf/hadsell-chopra-lecun-06.pdf
     '''
     margin = 1
-    y_true = -(y_true / 2 - 0.5)
-    y_pred = -(y_pred / 2 - 0.5)
     return K.mean(y_true * K.square(y_pred) + (1 - y_true) * K.square(K.maximum(margin - y_pred, 0)))     
