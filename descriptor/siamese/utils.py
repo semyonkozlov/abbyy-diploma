@@ -61,9 +61,16 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
         
         i += 1
         
-def contrastive_loss(y_true, y_pred):
-    '''Contrastive loss from Hadsell-et-al.'06
-    http://yann.lecun.com/exdb/publis/pdf/hadsell-chopra-lecun-06.pdf
-    '''
-    margin = 1
-    return K.mean(y_true * K.square(y_pred) + (1 - y_true) * K.square(K.maximum(margin - y_pred, 0)))     
+def show_images(images, n_images_in_row=4, titles=None):
+    assert (titles is None) or (len(images) == len(titles))
+    n_images = len(images)
+    if titles is None:
+        titles = [f'Patch {i}' for i in range(1, n_images + 1)]
+    n_cols = n_images_in_row
+    n_rows = n_images // 4 + 1
+    fig = plt.figure(figsize=(n_cols * 4, n_rows * 4))
+    for i, (image, title) in enumerate(zip(images, titles)):
+        splt = fig.add_subplot(n_rows, n_cols, i + 1)
+        plt.imshow(image.squeeze(), cmap='gray')
+        splt.set_title(title)
+    plt.show()
