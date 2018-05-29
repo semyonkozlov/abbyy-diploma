@@ -5,6 +5,8 @@ import keras.backend as K
 
 import os
 import cv2
+import random
+import imgaug as ia
 from imgaug import augmenters as iaa
 from tqdm import tqdm
 
@@ -24,6 +26,15 @@ def cut_patch_from_bitmap(bitmap, image_index):
 
     return bitmap[image_row * 64 : (image_row + 1) * 64, image_col * 64 : (image_col + 1) * 64]
 
+aug = iaa.OneOf([
+    iaa.Fliplr(0.3),
+    iaa.Flipud(0.3),
+    iaa.Affine(rotate=(90)),
+    iaa.Affine(rotate=(180)),
+    iaa.Affine(rotate=(270)),
+    iaa.Noop()
+])
+
 def create_generator(dataset, num_pairs, batch_size, augmentate=True):    
     i = 0
     input_a, input_b, targets = [], [], []
@@ -34,15 +45,6 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
     dissimilarities = match_file[match_file['3DpointID1'] != match_file['3DpointID2']]
     similarities = match_file[match_file['3DpointID1'] == match_file['3DpointID2']]
     assert len(similarities) == len(dissimilarities) == len(match_file) // 2 == num_pairs // 2
-    
-    aug = iaa.OneOf([
-        iaa.Fliplr(0.3),
-        iaa.Flipud(0.3),
-        iaa.Affine(rotate=(90)),
-        iaa.Affine(rotate=(180)),
-        iaa.Affine(rotate=(270)),
-        iaa.Noop()
-    ])
         
     while True:      
         if i % num_pairs == 0: # shuffle dataset every epoch
@@ -53,6 +55,7 @@ def create_generator(dataset, num_pairs, batch_size, augmentate=True):
             assert len(input_a) == len(input_b) == batch_size
             
             if augmentate:
+                global aug
                 input_a = aug.augment_images(input_a) 
                 input_b = aug.augment_images(input_b) 
                 
@@ -82,16 +85,22 @@ def show_images(images, n_images_in_row=4, titles=None):
     
 @lru_cache(maxsize=8)
 def read_image(img_file):
-    return cv2.cvtColor(cv2.imread(img_file), cv2.COLOR_RGB2GRAY)
+    img = cv2.imread(img_file, cv2.IMREAD_GRAYSCALE)
+    assert img is not None
+    return img
 
 def read_keypoint_patch(img_file, x, y, kp_size):
     img = read_image(img_file)
     x = int(x)
     y = int(y)
     r = max([int(np.ceil(kp_size)) // 2, 32])
+    max_y, max_x = img.shape
+    r = min([r, np.abs(max_y - y), y, np.abs(max_x - x), x])
     return cv2.resize(img[y - r : y + r, x - r : x + r], (64, 64))
 
 def create_aug_dataset(src_dir, dest_dir, aug):
+    error_files = []
+    
     if not os.path.exists(dest_dir):
         os.makedirs(dest_dir)
         
@@ -99,7 +108,16 @@ def create_aug_dataset(src_dir, dest_dir, aug):
     aug_det = aug.to_deterministic()
     
     for img_file in tqdm(os.listdir(src_dir)):
-        img = read_image(img_file)
+        img_file = os.path.join(src_dir, img_file)
+        aug_img_file = os.path.join(dest_dir, os.path.basename(img_file))
+        if os.path.exists(aug_img_file):
+            continue
+        try:
+            img = read_image(img_file)
+        except AssertionError:
+            error_files.append(img_file)
+            continue
+            
         aug_img = aug.augment_images([img])[0]
 
         sift_kps = sift.detect(img)
@@ -116,11 +134,59 @@ def create_aug_dataset(src_dir, dest_dir, aug):
         kp_file['aug_y'] = aug_xy[:, 1]
         kp_file['kp_size'] = [int(np.ceil(kp.size)) for kp in sift_kps]
 
-        aug_img_file = os.path.join(dest_dir, os.path.basename(img_file))
         kp_file['aug_img_file'] = aug_img_file
         kp_file['src_img_file'] = img_file
 
         cv2.imwrite(aug_img_file, aug_img)
         pre, ext = os.path.splitext(aug_img_file)
         kp_file.to_csv(f'{pre}.csv')
+   
+    return error_files
+
+def _create_matches(kp_files, num_matches):
+    input_a, input_b, targets = [], [], []
+    for kp_file in kp_files:
+        line_sample = kp_file.sample(n=num_matches//len(kp_files))
+        for i in range(len(line_sample)):
+            line = line_sample.iloc[i]
+            input_a.append(read_keypoint_patch(line.src_img_file, line.src_x, line.src_y, line.kp_size).reshape(64, 64, 1))
+            input_b.append(read_keypoint_patch(line.aug_img_file, line.aug_x, line.aug_y, line.kp_size).reshape(64, 64, 1))
+            targets.append(0)
+    return input_a, input_b, targets
+
+def _create_nonmatches(kp_files, num_nonmatches):
+    input_a, input_b, targets = [], [], []
+    num_files = len(kp_files)
+    for i in range(num_files):
+        kp_file = kp_files[i]
+        another_kp_file = kp_files[(i + 2) % num_files]
+        line_sample = kp_file.sample(n=num_nonmatches//num_files)
+        another_line_sample = another_kp_file.sample(n=num_nonmatches//num_files)
+        for j in range(len(line_sample)):
+            line = line_sample.iloc[j]
+            another_line = another_line_sample.iloc[j]
+            input_a.append(read_keypoint_patch(line.src_img_file, line.src_x, line.src_y, line.kp_size).reshape(64, 64, 1))
+            input_b.append(read_keypoint_patch(another_line.src_img_file, another_line.src_x, another_line.src_y, another_line.kp_size).reshape(64, 64, 1))
+            targets.append(1) 
+    return input_a, input_b, targets
+        
+def create_text_patches_generator(csv_files, batch_size, augmentate=True):
+    while True:
+        random.shuffle(csv_files)
+        random_csv_files = csv_files[:8]
+        kp_files = [pd.read_csv(csv_file, index_col=0) for csv_file in random_csv_files]
+
+        input_a, input_b, targets = _create_matches(kp_files, batch_size // 2)
+        input_a_nm, input_b_nm, targets_nm = _create_nonmatches(kp_files, batch_size // 2)
+        
+        input_a.extend(input_a_nm)
+        input_b.extend(input_b_nm)
+        targets.extend(targets_nm)
+        
+        if augmentate:
+            global aug
+            input_a = aug.augment_images(input_a) 
+            input_b = aug.augment_images(input_b) 
+        
+        yield [np.asarray(input_a), np.asarray(input_b)], targets
     
